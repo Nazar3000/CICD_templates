@@ -1,0 +1,1 @@
+### This project is an example of several options continuous deployment of a Django project on bitbucket and gitlab
