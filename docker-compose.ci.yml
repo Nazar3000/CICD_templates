@@ -4,13 +4,16 @@ services:
   web-app:
     build:
       context: .
-      dockerfile: ./docker/app/Dockerfile.dev
-    ports:
-      - "80:8000"
+      dockerfile: docker/app/Dockerfile.prod
+      cache_from:
+        - "${WEB_IMAGE}"
+    image: "${WEB_IMAGE}"
+    expose:
+      - "8000"
     volumes:
-      - ./service:/usr/src/app
-#    env_file:
-#      - .env.dev
+      - static_volume:/home/app/web/staticfiles
+      - media_volume:/home/app/web/mediafiles
+#    env_file: .env
     environment:
       - DB_HOST=database
       - DB_NAME=dbname
@@ -20,44 +23,63 @@ services:
       - database
 
   database:
-    image: postgres:13-alpine
-#    env_file:
-#      - .env.dev
+    build:
+      context: ./docker/postgres
+      cache_from:
+        - "${DB_IMAGE}"
+    image: "${DB_IMAGE}"
+#    env_file: .env
     environment:
       - POSTGRES_DB=dbname
       - POSTGRES_USER=dbuser
       - POSTGRES_PASSWORD=pass
-    volumes:
-      - ./postgres_passport:/docker-entrypoint-initdb.d
-      - ./postgres_data:/var/lib/postgresql/data
     ports:
       - "54321:5432"
+
+  nginx:
+    build:
+      context: ./docker/nginx
+      cache_from:
+        - "${NGINX_IMAGE}"
+    image: "${NGINX_IMAGE}"
+    volumes:
+      - static_volume:/home/app/web/staticfiles
+      - media_volume:/home/app/web/mediafiles
+    ports:
+      - "80:80"
+    depends_on:
+      - web-app
 
   redis:
     build:
       context: ./docker/redis
+      cache_from:
+       - "${REDIS_IMAGE}"
+    image: "${REDIS_IMAGE}"
+
     expose:
       - "6379"
     command: [ "/tmp/redis.conf" ]
     restart: always
     hostname: redis
 
+
   worker:
     build:
       context: .
-      dockerfile: docker/app/Dockerfile.dev
+      dockerfile: docker/app/Dockerfile.prod
+      cache_from:
+        - "${WORKER_IMAGE}"
+    image: "${WORKER_IMAGE}"
     hostname: worker
     entrypoint: celery
     command: -A celery_app.app worker --loglevel=info
-#    env_file:
-#      - .env.dev
+#    env_file: .env
     environment:
       - DB_HOST=database
       - DB_NAME=dbname
       - DB_USER=dbuser
       - DB_PASS=pass
-    volumes:
-      - ./service:/usr/src/app
     links:
       - redis
     depends_on:
@@ -67,42 +89,26 @@ services:
   worker2:
     build:
       context: .
-      dockerfile: docker/app/Dockerfile.dev
+      dockerfile: docker/app/Dockerfile.prod
+      cache_from:
+        - "${WORKER_IMAGE}"
+    image: "${WORKER_IMAGE2}"
     hostname: worker2
     entrypoint: celery
     command: -A celery_app.app worker --loglevel=info
-#    env_file:
-#      - .env.dev
+#    env_file: .env
     environment:
       - DB_HOST=database
       - DB_NAME=dbname
       - DB_USER=dbuser
       - DB_PASS=pass
-    volumes:
-      - ./service:/usr/src/app
     links:
       - redis
     depends_on:
       - redis
       - database
 
-  flower:
-    build:
-      context: .
-      dockerfile: docker/app/Dockerfile.dev
-
-    hostname: flower
-    entrypoint: celery
-    command: -A celery_app.app flower
-    volumes:
-      - ./service:/usr/src/app
-    links:
-      - redis
-    depends_on:
-      - redis
-    ports:
-      - "5555:5555"
 
 volumes:
-  web-app:
-  postgres_data:
+  static_volume:
+  media_volume:

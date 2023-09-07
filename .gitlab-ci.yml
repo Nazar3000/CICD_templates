@@ -1,0 +1,85 @@
+image:
+  name: docker/compose:1.29.2
+  entrypoint: [ "" ]
+
+services:
+  - docker:24.0.5-dind
+
+stages:
+  - tests
+  - build
+  - deploy
+
+variables:
+#  DOCKER_HOST: tcp://docker:2375
+  DOCKER_DRIVER: overlay2
+
+before_script:
+  - export IMAGE=$CI_REGISTRY/$CI_PROJECT_NAMESPACE/$CI_PROJECT_NAME
+  - export WEB_IMAGE=$IMAGE:web-app
+  - export DB_IMAGE=$IMAGE:database
+  - export REDIS_IMAGE=$IMAGE:redis
+  - export WORKER_IMAGE=$IMAGE:worker
+  - export WORKER_IMAGE2=$IMAGE:worker2
+  - export NGINX_IMAGE=$IMAGE:nginx
+  - apk add --no-cache openssh-client bash
+  - chmod +x ./gitlab/setup_env.sh
+  - bash ./gitlab/setup_env.sh
+  - docker login -u $CI_REGISTRY_USER -p $CI_JOB_TOKEN $CI_REGISTRY
+
+
+tests:
+  stage: tests
+  script:
+    - docker pull $IMAGE:web-app || true
+    - docker pull $IMAGE:database || true
+    - docker pull $IMAGE:redis || true
+    - docker-compose -f docker-compose.tests.yml down --remove-orphans
+    - docker-compose -f docker-compose.tests.yml build
+    - docker-compose -f docker-compose.tests.yml up -d database
+    - docker-compose -f docker-compose.tests.yml up -d redis
+    - docker-compose -f docker-compose.tests.yml run web-app pytest
+    - docker-compose -f docker-compose.tests.yml run web-app flake8 --ignore=E501,F401,F811,E722 .
+    - docker-compose -f docker-compose.tests.yml down --volumes
+  allow_failure: false
+  rules:
+    - if: '$CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "master"'
+
+
+build:
+  stage: build
+
+  script:
+
+    - docker pull $IMAGE:web-app || true
+    - docker pull $IMAGE:database || true
+    - docker pull $IMAGE:redis || true
+    - docker pull $IMAGE:worker || true
+    - docker pull $IMAGE:worker2 || true
+    - docker pull $IMAGE:nginx || true
+    - docker-compose -f docker-compose.ci.yml build
+    - docker push $IMAGE:web-app
+    - docker push $IMAGE:database
+    - docker push $IMAGE:redis
+    - docker push $IMAGE:worker
+    - docker push $IMAGE:worker2
+    - docker push $IMAGE:nginx
+  rules:
+    - if: '$CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "master"'
+
+
+
+deploy:
+  stage: deploy
+  script:
+    - mkdir -p ~/.ssh
+    - echo "$ID_RSA" | tr -d '\r' > ~/.ssh/id_rsa
+    - chmod 700 ~/.ssh/id_rsa
+    - eval "$(ssh-agent -s)"
+    - ssh-add ~/.ssh/id_rsa
+    - ssh-keyscan -H 'gitlab.com' >> ~/.ssh/known_hosts
+    - chmod +x ./gitlab/deploy.sh
+    - scp  -o StrictHostKeyChecking=no -r ./.env ./docker-compose.prod.yml root@$SERVER_IP:app
+    - bash ./gitlab/deploy.sh
+  only:
+    - master
