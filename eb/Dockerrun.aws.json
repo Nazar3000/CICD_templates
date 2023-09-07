@@ -1,0 +1,201 @@
+{
+  "AWSEBDockerrunVersion": 2,
+  "volumes": [
+    {
+      "name": "service"
+    },
+    {
+      "name": "static_volume"
+    },
+    {
+      "name": "media_volume"
+    }
+  ],
+
+  "containerDefinitions": [
+    {
+      "name": "web-app",
+      "image": "629513903246.dkr.ecr.us-east-1.amazonaws.com/service:WEB_IMAGE_TAG",
+      "command": [
+        "/home/app/web/entrypoint.prod.sh"
+      ],
+      "essential": true,
+      "memory": 307,
+      "mountPoints": [
+        {
+          "sourceVolume": "service",
+          "containerPath": "/home/app/web"
+        },
+        {
+          "sourceVolume": "static_volume",
+          "containerPath": "/home/app/web/staticfiles"
+        },
+        {
+          "sourceVolume": "media_volume",
+          "containerPath": "/home/app/web/mediafiles"
+        }
+      ],
+      "environment": [
+        {
+          "name": "DB_HOST",
+          "value": "django"
+        },
+        {
+          "name": "DB_NAME",
+          "value": "dbname"
+        },
+        {
+          "name": "DB_USER",
+          "value": "dbuser"
+        },
+        {
+          "name": "DB_PASS",
+          "value": "pass"
+        }
+      ],
+      "portMappings": [
+        {
+          "hostPort": 8000,
+          "containerPort": 8000
+        }
+      ],
+      "depends_on": [
+        "database"
+      ]
+    },
+    {
+      "name": "database",
+      "image": "629513903246.dkr.ecr.us-east-1.amazonaws.com/service:database",
+      "essential": true,
+      "memory": 228,
+      "environment": [
+        {
+          "name": "POSTGRES_DB",
+          "value": "dbname"
+        },
+        {
+          "name": "POSTGRES_USER",
+          "value": "dbuser"
+        },
+        {
+          "name": "POSTGRES_PASSWORD",
+          "value": "pass"
+        }
+      ],
+      "portMappings": [
+        {
+          "hostPort": 5432,
+          "containerPort": 54321
+        }
+      ]
+    },
+    {
+      "name": "nginx",
+      "image": "629513903246.dkr.ecr.us-east-1.amazonaws.com/service:nginx",
+      "essential": true,
+      "memory": 128,
+      "mountPoints": [
+        {
+          "sourceVolume": "service",
+          "containerPath": "/home/app/web"
+        },
+        {
+          "sourceVolume": "static_volume",
+          "containerPath": "/home/app/web/staticfiles"
+        },
+        {
+          "sourceVolume": "media_volume",
+          "containerPath": "/home/app/web/mediafiles"
+        },
+        {
+          "sourceVolume": "awseb-logs-nginx",
+          "containerPath": "/var/log/nginx"
+        }
+      ],
+      "portMappings": [
+        {
+          "hostPort": 80,
+          "containerPort": 80
+        }
+      ],
+      "links": [
+        "web-app"
+      ]
+    },
+
+    {
+      "name": "redis",
+      "image": "629513903246.dkr.ecr.us-east-1.amazonaws.com/service:redis",
+      "command": [ "/tmp/redis.conf" ],
+      "essential": true,
+      "memory": 128,
+      "portMappings": [
+        {
+          "containerPort": 6379
+        }
+      ]
+    },
+    {
+      "name": "worker",
+      "image": "629513903246.dkr.ecr.us-east-1.amazonaws.com/service:worker",
+      "command": ["-A celery_app.app worker --loglevel=info"],
+
+      "essential": true,
+      "memory": 50,
+
+      "environment": [
+        {
+          "name": "DB_HOST",
+          "value": "django"
+        },
+        {
+          "name": "DB_NAME",
+          "value": "dbname"
+        },
+        {
+          "name": "DB_USER",
+          "value": "dbuser"
+        },
+        {
+          "name": "DB_PASS",
+          "value": "pass"
+        }
+      ],
+      "depends_on": [
+        "redis",
+        "database"
+      ]
+    },
+    {
+      "name": "worker2",
+      "image": "629513903246.dkr.ecr.us-east-1.amazonaws.com/service:worker2",
+      "command": ["-A celery_app.app worker --loglevel=info"],
+
+      "essential": true,
+      "memory": 50,
+
+      "environment": [
+        {
+          "name": "DB_HOST",
+          "value": "django"
+        },
+        {
+          "name": "DB_NAME",
+          "value": "dbname"
+        },
+        {
+          "name": "DB_USER",
+          "value": "dbuser"
+        },
+        {
+          "name": "DB_PASS",
+          "value": "pass"
+        }
+      ],
+      "depends_on": [
+        "redis",
+        "database"
+      ]
+    }
+  ]
+}
