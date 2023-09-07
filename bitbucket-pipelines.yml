@@ -1,0 +1,192 @@
+image: atlassian/pipelines-awscli
+
+definitions:
+  services:
+    postgres:
+      image: postgres
+      variables:
+        POSTGRES_DB: dbname
+        POSTGRES_USER: dbuser
+        POSTGRES_PASSWORD: pass
+    redis:
+      image: redis
+
+
+  steps:
+
+    tests_in_docker: &tests_in_docker
+      image: docker/compose:1.29.2
+      name: Tests in docker
+      services:
+        - docker
+      caches:
+        - docker
+      script:
+        - export WEB_IMAGE=$APP_IMAGE_URL:web-app
+        - export DB_IMAGE=$APP_IMAGE_URL:database
+        - export REDIS_IMAGE=$APP_IMAGE_URL:redis
+        - docker-compose -f docker-compose.tests.yml build
+        - docker-compose -f docker-compose.tests.yml up -d database
+        - docker-compose -f docker-compose.tests.yml up -d redis
+        - docker-compose -f docker-compose.tests.yml run web-app flake8 --ignore=E501,F401,F811,E722 .
+        - docker-compose -f docker-compose.tests.yml run web-app pytest
+        - docker-compose -f docker-compose.tests.yml down --volumes
+      artifacts:
+              - "service/coverage.xml"
+
+    pytest: &pytest
+      image: python:3.9
+      name: Pytest
+      services:
+        - postgres
+        - redis
+      caches:
+        - pip
+      size: 2x
+      script:
+        - python -m pip install -U pip pip==23.2.1 setuptools pytest-cov
+#       for pipfile=================
+#        - python -m pip install -U pip pipenv==2023.9.7 setuptools pytest-cov
+#        - python -m pipenv lock --requirements --dev > /tmp/requirements.txt
+#        - cat /tmp/requirements.txt
+#        - python -m pip install --upgrade -r /tmp/requirements.txt
+#        for pipfile=================
+        - export ENABLE_LOGGING=false DB_NAME=dbname DB_HOST=localhost DB_USER=dbuser DB_PASS=pass REDIS_HOST=localhost TEST_MODE=True
+        - cd service
+        - pip3 install -r requirements.txt
+        - pip3 install psycopg2
+
+        - python -m pytest --cov=service tests --cov-report=xml
+      artifacts:
+        - "service/coverage.xml"
+
+  down_merge_prod_staging: &down_merge_prod_staging
+    image: python:3.9
+    name: Down merge from master to staging
+#    runs-on: ec2
+    caches:
+      - pip
+    script:
+      - pip3 install --upgrade pip
+      - pip3 install --upgrade atlassian-python-api==3.41.1
+      - python ./automerge_bitbucket.py -s master -d staging  --repo-owner owner --repo-slug reposlug
+#
+
+    build_image: &build_image
+      name: Build and push docker image to ECR
+#      runs-on: ec2
+      caches:
+        - docker
+      services:
+        - docker
+      script:
+        - export DOCKER_TAG=$(cat ./DOCKER_TAG.txt)
+        - export DOCKER_URI=$APP_IMAGE_URL:$DOCKER_TAG
+        - export BEANSTALK_ENV=$(cat ./BEANSTALK_ENV.txt)
+        - echo $DOCKER_URI
+        - export WEB_IMAGE=$APP_IMAGE_URL:$BEANSTALK_ENV-$DOCKER_TAG
+        - export DB_IMAGE=$APP_IMAGE_URL:database
+        - export REDIS_IMAGE=$APP_IMAGE_URL:redis
+        - export WORKER_IMAGE=$APP_IMAGE_URL:worker
+        - export WORKER_IMAGE2=$APP_IMAGE_URL:worker2
+        - export NGINX_IMAGE=$APP_IMAGE_URL:nginx
+        - eval $(aws ecr get-login --no-include-email)
+        - apk update
+        - apk add docker-compose
+        - docker-compose -f docker-compose.ci.yml build
+        - docker push $WEB_IMAGE
+        - docker push $DB_IMAGE
+        - docker push $REDIS_IMAGE
+        - docker push $WORKER_IMAGE
+        - docker push $WORKER_IMAGE2
+        - docker push $NGINX_IMAGE
+
+
+    deploy_to_elastic_benstalk_vs_docker-compose: &deploy_to_elastic_benstalk_vs_docker-compose
+      image: python:3.9
+      name: Deploy to elastic beanstalk
+#      runs-on: ec2
+      caches:
+        - pip
+      script:
+        - export BEANSTALK_ENV=$(cat ./BEANSTALK_ENV.txt)
+        - echo "Current BEANSTALK_ENV=$BEANSTALK_ENV"
+        - export DOCKER_TAG=$(cat ./DOCKER_TAG.txt)
+        - echo $DOCKER_TAG
+        - apt-get update
+        - pip3 install --upgrade pip
+        - pip3 install --upgrade awsebcli==3.20.8 pip==23.2.1 certifi==2023.7.22 idna==3.4 python_dateutil==2.8.2 pyrsistent==0.19.3 chardet==5.2.0 requests==2.31.0 pynacl==1.5.0 cryptography==41.0.3
+        - echo $AWS_DEFAULT_REGION
+        - echo $AWS_ACCESS_KEY_ID
+        - eb init service -r $AWS_DEFAULT_REGION -p 'Docker'
+        - eb use $BEANSTALK_ENV
+        - eb deploy -l "service-app-$BEANSTALK_ENV-$BITBUCKET_BUILD_NUMBER"
+
+    deploy_to_elastic_benstalk_vs_dockerrun_aws_json: &deploy_to_elastic_benstalk_vs_dockerrun_aws_json
+      image: python:3.9
+      name: Deploy to elastic beanstalk
+#      runs-on: ec2
+      caches:
+        - pip
+      script:
+        - export BEANSTALK_ENV=$(cat ./BEANSTALK_ENV.txt)
+        - echo "Current BEANSTALK_ENV=$BEANSTALK_ENV"
+        - export DOCKER_TAG=$(cat ./DOCKER_TAG.txt)
+        - echo $DOCKER_TAG
+        - apt-get update
+        - pip3 install --upgrade pip
+        - pip3 install --upgrade awsebcli==3.20.9 pip==23.2.1 certifi==2023.7.22 idna==3.4 python_dateutil==2.8.2 pyrsistent==0.19.3 chardet==5.2.0 requests==2.31.0 pynacl==1.5.0 cryptography==41.0.3
+        - cd eb
+        - sed -i -e "s|WEB_IMAGE_TAG|$BEANSTALK_ENV-$DOCKER_TAG|g" Dockerrun.aws.json
+        - eb init service -r $AWS_DEFAULT_REGION -p 'Docker'
+        - eb use $BEANSTALK_ENV
+        - eb deploy -l "service-app-$BEANSTALK_ENV-$BITBUCKET_BUILD_NUMBER"
+
+
+  code_style_check: &code_style_check
+    image: python:3.9
+    name: Code Style Check
+    caches:
+      - pip
+    script:
+      - pip install flake8
+      - git fetch origin "+refs/heads/$BITBUCKET_PR_DESTINATION_BRANCH:refs/remotes/origin/$BITBUCKET_PR_DESTINATION_BRANCH"
+      - git diff -u --relative origin/$BITBUCKET_PR_DESTINATION_BRANCH... | flake8 --ignore=E501,W503,F403,F401,E203,E266 --max-line-length=116 --max-complexity=21 --select=W,T4,B9,B,C,E,F --exclude=*/migrations/*,*/tests/*
+
+
+pipelines:
+  pull-requests:
+    '**':
+      - step: *code_style_check
+      - step: *tests_in_docker
+      - step: *pytest
+
+  branches:
+    staging:
+      - step:
+          image: python:3.9
+          name: Set environment name
+          script:
+            - echo "service-staging" > BEANSTALK_ENV.txt
+            - echo "staging-$BITBUCKET_BUILD_NUMBER" > DOCKER_TAG.txt
+          artifacts:
+            - "BEANSTALK_ENV.txt"
+            - "DOCKER_TAG.txt"
+      - step: *build_image
+      - step: *deploy_to_elastic_benstalk_vs_dockerrun_aws_json
+    #      - step: *deployToElasticBenstalk_vs_docker-compose
+
+    master:
+      - step:
+          image: python:3.9
+          name: Set environment name
+          script:
+            - echo "service-prod" > BEANSTALK_ENV.txt
+            - echo "prod-$BITBUCKET_BUILD_NUMBER" > DOCKER_TAG.txt
+          artifacts:
+            - "BEANSTALK_ENV.txt"
+            - "DOCKER_TAG.txt"
+      - step: *build_image
+      - step: *deploy_to_elastic_benstalk_vs_dockerrun_aws_json
+#      - step: *deploy_to_elastic_benstalk_vs_docker-compose
+      - step: *down_merge_prod_staging
