@@ -35,4 +35,3 @@ RUN pip install -r $APP_HOME/requirements.txt
 COPY ./service/entrypoint.prod.sh $APP_HOME
 # copy project
 COPY ./service $APP_HOME
-#

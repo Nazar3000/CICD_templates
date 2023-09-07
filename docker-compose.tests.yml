@@ -1,0 +1,56 @@
+version: "3.9"
+
+services:
+  web-app:
+    build:
+      context: .
+      dockerfile: docker/app/Dockerfile.tests
+      cache_from:
+        - "${WEB_IMAGE}"
+    image: "${WEB_IMAGE}"
+    expose:
+      - "8000"
+    environment:
+      - DB_HOST=database
+      - DB_NAME=dbname
+      - DB_USER=dbuser
+      - DB_PASS=pass
+    depends_on:
+      - database
+    networks:
+      - tests-network
+
+  database:
+    build:
+      context: ./docker/postgres
+      cache_from:
+        - "${DB_IMAGE}"
+    image: "${DB_IMAGE}"
+    environment:
+      - POSTGRES_DB=dbname
+      - POSTGRES_USER=dbuser
+      - POSTGRES_PASSWORD=pass
+    ports:
+      - "15432:5432"
+    hostname: database
+    networks:
+      - tests-network
+#
+  redis:
+    build:
+      context: ./docker/redis
+      cache_from:
+       - "${REDIS_IMAGE}"
+    image: "${REDIS_IMAGE}"
+    expose:
+      - "6379"
+    command: [ "/tmp/redis.conf" ]
+    restart: always
+    hostname: redis
+    networks:
+      - tests-network
+
+
+networks:
+  tests-network:
+    name: tests-network

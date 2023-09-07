@@ -70,7 +70,7 @@ Thumbs.db
 
 ### Postgres ###
 postgres_data
-
+postgres_passport
 
 .elasticbeanstalk
 # Elastic Beanstalk Files
